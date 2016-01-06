@@ -1,0 +1,574 @@
+#The primary purpose of this script is to serve as a preliminary means to evaluating the performance
+#of several different classifiers on an input of data. More specifically, this data must satisfy the 
+#conditions that it 2-class, and isn't missing any data.
+#Last date edited: August 14th, 2015
+
+#Classifiers
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.lda import LDA as LDA_clf
+from sklearn.qda import QDA as QDA_clf
+from sklearn import svm
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import AdaBoostClassifier
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.cross_validation import train_test_split
+from matplotlib.colors import ListedColormap
+from sklearn.preprocessing import StandardScaler
+from operator import itemgetter
+from sklearn import cross_validation
+
+import scipy
+import matplotlib.pyplot as plt
+import math
+import numpy as np
+np.set_printoptions(suppress=True)
+#A feature will potentially have a standard deviation of 0 -- in the calculation of the Pearson coefficient, 
+#values are divided by the standard deviation, so we wish to suppress the error warnings.
+np.seterr(all='ignore')
+
+#Main method - takes in an n_0 x m training dataset, n_1 x m testing dataset, and their corresponding labels, 
+#n_0 x 1 training labels, n_1 x 1 testing labels. Also takes in the number of top features that are to be considered
+#(this number should NOT exceed the number of features available in in X_train/X_test), number of folds in cross-validation
+#(for n_folds < 2 classifiers are just run over original dataset), classifier indices (which classifiers want to be used),
+#and a feature array(if non-empty, top features considered will be printed)
+def run_classifiers(X_train, X_test, y_train, y_test, n_features=2, n_folds=2, classifier_indices=[0,1,2,3,4,5,6], features=[]):
+	#select classifiers to be used
+	classifier_names = np.array([kNearestNeighbors, RandomForest, LDA, QDA, SVM, DecisionTree, NaiveBayes, AdaBoost])[classifier_indices]
+	#top_n_p_features_indices and top_n_rf_features_indices are sorted by rank from highest to lowest already
+	if len(features) != 0:
+		features = np.array(features)
+		top_p_features_for_each_fold = []
+		top_rf_features_for_each_fold = []
+		fold_index = 1
+	classifier_scores_p = {}
+	classifier_scores_rf = {}
+	if n_folds >= 2:
+		skf = cross_validation.StratifiedKFold(y_train, n_folds=n_folds)
+		#train and test indices for each fold
+		for train_index, test_index in skf:
+			X_train_cv, X_test_cv = X_train[train_index], X_train[test_index]
+			y_train_cv, y_test_cv = y_train[train_index], y_train[test_index]
+			X_train_n_p, X_train_n_rf, top_n_p_features_indices, top_n_rf_features_indices = get_top_n_features(X_train_cv, y_train_cv, n_features, True)
+			#if features is non-empty, store the top features of each fold for later printing
+			if len(features) != 0:
+				top_p_features_for_each_fold.append(features[top_n_p_features_indices].tolist())
+				top_rf_features_for_each_fold.append(features[top_n_rf_features_indices].tolist())
+
+			#Slice out top features in descending order
+			for num_features in range(1, n_features + 1):
+				top_p_features, top_rf_features = top_n_p_features_indices[:num_features], top_n_rf_features_indices[:num_features]
+				X_train_cv_p, X_train_cv_rf = X_train_cv[:,top_p_features], X_train_cv[:,top_rf_features]
+				X_test_cv_p, X_test_cv_rf = X_test_cv[:,top_p_features], X_test_cv[:,top_rf_features]
+				
+				for classifier_name in classifier_names:
+					#result is ['classifier name, parameters, number of features', training accuracy, test accuracy]
+					result_cv_p = classifier_name(X_train_cv_p, X_test_cv_p, y_train_cv, y_test_cv, num_features)
+					result_cv_rf = classifier_name(X_train_cv_rf, X_test_cv_rf, y_train_cv, y_test_cv, num_features)
+
+					#with a dictionary map the first element of result to the last two elements of result
+					#so we have a classifier mapped to its train score, test score
+					map_name_to_scores(result_cv_p, classifier_scores_p)
+					map_name_to_scores(result_cv_rf, classifier_scores_rf)
+
+	else:
+		X_train_n_p, X_train_n_rf, top_n_p_features_indices, top_n_rf_features_indices = get_top_n_features(X_train, y_train, n_features, True)
+		#if features is non-empty, store top features for later printing
+		if len(features) != 0:
+			top_p_features_for_each_fold.append(features[top_n_p_features_indices].tolist())
+			top_rf_features_for_each_fold.append(features[top_n_rf_features_indices].tolist())
+		
+		#Slice out top features in descending order
+		for num_features in range(1, n_features + 1):
+
+			top_p_features, top_rf_features = top_n_p_features_indices[:num_features], top_n_rf_features_indices[:num_features]
+			X_train_p, X_train_rf = X_train[:, top_p_features], X_train[:, top_rf_features]
+			X_test_p, X_test_rf = X_test[:, top_p_features], X_test[:, top_rf_features]
+			
+			for classifier_name in classifier_names:
+				#result is ['classifier name, parameters, number of features', training accuracy, test accuracy]
+				result_p = classifier_name(X_train_p, X_test_p, y_train, y_test, num_features)
+				result_rf = classifier_name(X_train_rf, X_test_rf, y_train, y_test, num_features)
+
+				#with a dictionary map the first element of result to the last two elements of result
+				#so we have a classifier mapped to its train score, test score
+				map_name_to_scores(result_p, classifier_scores_p)
+				map_name_to_scores(result_rf, classifier_scores_rf)
+
+	#make dictionary map to means of train and test error for each permutation of parameters and features
+	#for each fold, e.g. we map Fold 1: kNN k=3, 5 features, Fold 2: kNN k=3, 5 features, ....we take the 
+	#average of this classifier across all folds, then map KNN k=3, 5 features to the mean of train score, test score
+	classifier_scores_p = map_to_means(classifier_scores_p)
+	classifier_scores_rf = map_to_means(classifier_scores_rf)
+
+	best_of_each_classifier_p = {}
+	best_of_each_classifier_rf = {}
+
+	#find the unique classifier (i.e. it has a unique parameters and number of features considered)
+	#that had the highest test score, map said classifier to its corresponding train score, test score
+	find_best_of_each_classifier(classifier_scores_p, best_of_each_classifier_p)
+	find_best_of_each_classifier(classifier_scores_rf, best_of_each_classifier_rf)
+	
+	#prints top features used either across all folds, or the entire training set
+	if len(features) != 0:
+		if n_folds >= 2:
+			print "Top n Pearson Features:"
+			for i in range(len(top_p_features_for_each_fold)):
+				print "Fold %r:" % (i + 1)
+				print ', '.join(map(str, top_p_features_for_each_fold[i]))	
+			print 
+			print "Top n Random Forest Features:"
+			for i in range(len(top_rf_features_for_each_fold)):
+				print "Fold %r:" % (i + 1)
+				print ', '.join(map(str, top_rf_features_for_each_fold[i]))	
+		else: 
+			print "Top n Pearson Features:"
+			print ', '.join(map(str, top_p_features_for_each_fold[0]))	
+			print 
+			print "Top n Random Forest Features:"
+			print ', '.join(map(str, top_rf_features_for_each_fold[0]))	
+		print 	
+
+	#print the scores of classifiers with *best* parameters
+	print "Top Pearson Feature Classifiers:"
+	for elm in best_of_each_classifier_p.values():
+		print ', '.join(map(str, elm))
+	print
+	print "Top Random Forest Feature Classifiers:"
+	for elm in best_of_each_classifier_rf.values():
+		print ', '.join(map(str, elm))
+
+######################################################################################################
+#The next seven functions correspond to the 7 classifiers available for testing in this script.
+#Each takes in a training dataset, testing dataset, training labels, test labels, and the current
+#number of top features currently being considered. See individual functions for further parameters,
+#which allow for *tuning* of parameters for each classifier. With functions that allow a parameter to 
+#vary, keep the other parameters fixed.
+
+
+#vary_k varies k from 3 to the minimum of the number of elements in the testing set and the number of 
+#elements in the training set. The step size for each iteration of k can also be changed for efficiency.
+#Returns a nested array containing a string describing the classifier, train score, test score
+def kNearestNeighbors(X_train, X_test, y_train, y_test, curr_features, vary_k=False, step_size=2):
+	k_range = min(len(X_test),len(X_train))
+	index = 0
+	if vary_k:
+		scores = [0] * ((k_range - 3)/ step_size + 1)
+		for k in range(3, k_range + 1, step_size):
+			clf = KNeighborsClassifier(k).fit(X_train, y_train)
+			test_score = clf.score(X_test, y_test)
+			train_score = clf.score(X_train, y_train)
+			scores[index] = ['kNN k = %r, %r features' % (k, curr_features), train_score, test_score]
+			index += 1
+		return scores
+	else:
+		clf = KNeighborsClassifier(3).fit(X_train, y_train)
+		test_score = clf.score(X_test, y_test)
+		train_score = clf.score(X_train, y_train)
+		return [['kNN k = %r, %r features' % (3, curr_features), train_score, test_score]] 
+
+
+def RandomForest(X_train, X_test, y_train, y_test, curr_features, vary_estimators=False, vary_max_depth=False, vary_min_samples_leaf=False, step_size=2):
+	parameter_range = min(len(X_test), len(X_train))
+	scores = [0] * ((parameter_range - 1)/ step_size + 1)
+	index = 0
+	if vary_estimators:
+		for i in range(1, parameter_range + 1, step_size):
+			clf = RandomForestClassifier(n_estimators=i).fit(X_train, y_train)
+			test_score = clf.score(X_test, y_test)
+			train_score = clf.score(X_train, y_train)
+			scores[index] = ['RF n_estimators = %r, %r features' % (i, curr_features), train_score, test_score]
+			index += 1
+		return scores
+	elif vary_max_depth:
+		for i in range(1, parameter_range + 1, step_size):
+			clf = RandomForestClassifier(max_depth=i).fit(X_train, y_train)
+			test_score = clf.score(X_test, y_test)
+			train_score = clf.score(X_train, y_train)
+			scores[index] = ['RF max depth = %r, %r features' % (i, curr_features), train_score, test_score]	
+			index += 1
+		return scores
+	elif vary_min_samples_leaf:
+		for i in range(1, parameter_range + 1, step_size):
+			clf = RandomForestClassifier(min_samples_leaf=i).fit(X_train, y_train)
+			test_score = clf.score(X_test, y_test)
+			train_score = clf.score(X_train, y_train)
+			scores[index] = ['RF min_samples_leaf = %r, %r features' % (i, curr_features), train_score, test_score]
+			index += 1
+		return scores
+	else:
+		clf = RandomForestClassifier().fit(X_train, y_train)
+		test_score = clf.score(X_test, y_test)
+		train_score = clf.score(X_train, y_train)
+		return [['RF default, %r features' % (curr_features), train_score, test_score]]
+
+def LDA(X_train, X_test, y_train, y_test, curr_features):
+	clf = LDA_clf().fit(X_train, y_train)
+	test_score = clf.score(X_test, y_test)
+	train_score = clf.score(X_train, y_train)
+	return [['LDA, %r features' % (curr_features), train_score, test_score]]
+
+def QDA(X_train, X_test, y_train, y_test, curr_features):
+	clf = QDA_clf().fit(X_train, y_train)
+	test_score = clf.score(X_test, y_test)
+	train_score = clf.score(X_train, y_train)
+	return [['QDA, %r features' % (curr_features), train_score, test_score]]
+
+#There are four kernels available for use, vary_kernel=True returns training/test scores for all kernels
+def SVM(X_train, X_test, y_train, y_test, curr_features, vary_kernel=False):
+	#degree of SVC polynomial used for fitting
+	degree = 3
+	titles = ['SVC linear kernel','LinearSVC (linear kernel)','SVC RBF kernel','SVC polynomial (degree %r) kernel' % (degree)]
+	if vary_kernel:
+		svc = svm.SVC(kernel='linear').fit(X_train, y_train)
+		rbf_svc = svm.SVC(kernel='rbf').fit(X_train, y_train)
+		poly_svc = svm.SVC(kernel='poly', degree=degree).fit(X_train, y_train)
+		lin_svc = svm.LinearSVC().fit(X_train, y_train)
+		kernels = [svc, rbf_svc, poly_svc, lin_svc]
+		
+		scores = []
+		for name, kernel in zip(titles, kernels):
+			test_score = kernel.score(X_test, y_test)
+			train_score = kernel.score(X_train, y_train)
+			scores.append([name + ', %r features' % (curr_features), train_score, test_score])
+		return scores
+
+	else:
+		rbf_svc = svm.SVC(kernel='rbf').fit(X_train, y_train)
+		test_score = rbf_svc.score(X_test, y_test)
+		train_score = rbf_svc.score(X_train, y_train)
+		return [[titles[2] + ', %r features' % (curr_features), train_score, test_score]]
+
+def DecisionTree(X_train, X_test, y_train, y_test, curr_features, vary_max_depth=False, vary_min_samples_leaf=False, step_size=2):
+	parameter_range = min(len(X_test), len(X_train))
+	scores = [0] * ((parameter_range - 1)/ step_size + 1)
+	index = 0
+	if vary_max_depth:
+		for i in range(1, parameter_range + 1, step_size):
+			clf = DecisionTreeClassifier(max_depth=i).fit(X_train, y_train)
+			test_score = clf.score(X_test, y_test)
+			train_score = clf.score(X_train, y_train)
+			scores[index] = ['DT max depth = %r, %r features' % (i, curr_features), train_score, test_score]	
+			index += 1
+		return scores
+	elif vary_min_samples_leaf:
+		for i in range(1, parameter_range + 1, step_size):
+			clf = DecisionTreeClassifier(min_samples_leaf=i).fit(X_train, y_train)
+			test_score = clf.score(X_test, y_test)
+			train_score = clf.score(X_train, y_train)
+			scores[index] = ['DT min_samples_leaf = %r, %r features' % (i, curr_features), train_score, test_score]
+			index += 1
+		return scores
+	else:
+		clf = DecisionTreeClassifier().fit(X_train, y_train)
+		test_score = clf.score(X_test, y_test)
+		train_score = clf.score(X_train, y_train)
+		return [['DT default, %r features' % (curr_features), train_score, test_score]]
+
+def NaiveBayes(X_train, X_test, y_train, y_test, curr_features):
+	clf = GaussianNB().fit(X_train, y_train)
+	test_score = clf.score(X_test, y_test)
+	train_score = clf.score(X_train, y_train)
+	return [['NB, %r features' % (curr_features), train_score, test_score]]
+
+def AdaBoost(X_train, X_test, y_train, y_test, curr_features, vary_estimators=False, vary_learning_rate=False):
+	estimator_step_size = 2
+	start, stop, step_size = 0.02, 2, 99
+	number_of_steps = (stop - start) / step_size
+	parameter_range = min(len(X_test), len(X_train))
+	
+	if vary_estimators:
+		scores = [0] * ((parameter_range - 1)/ estimator_step_size + 1)
+		index = 0
+		for i in range(1, parameter_range + 1, step_size):
+			clf = AdaBoostClassifier(n_estimators=i).fit(X_train, y_train)
+			test_score = clf.score(X_test, y_test)
+			train_score = clf.score(X_train, y_train)
+			scores[index] = ['AB n_estimators = %r, %r features' % (i, curr_features), train_score, test_score]	
+			index += 1
+		return scores
+	elif vary_learning_rate:
+		scores = [0] * number_of_steps
+		index = 0
+		for i in range(np.linspace(start, stop, step_size)):
+			clf = AdaBoostClassifier(learning_rate=i).fit(X_train, y_train)
+			test_score = clf.score(X_test, y_test)
+			train_score = clf.score(X_train, y_train)
+			scores[index] = ['AB learning_rate = %r, %r features' % (i, curr_features), train_score, test_score]	
+			index += 1
+		return scores
+	else:
+		clf = AdaBoostClassifier(n_estimators=i).fit(X_train, y_train)
+		test_score = clf.score(X_test, y_test)
+		train_score = clf.score(X_train, y_train)
+		return [['AB default, %r features' % (curr_features), train_score, test_score]]
+
+######################################################################################################
+#The next two methods provide simple plotting tools for an n-dimensional 2-class dataset by selecting the 
+#top 2 features, then visualization in 2-space.
+
+
+#Given an n x m data matrix, an n x 1 array of corresponding labels (2-class), and an array of the
+#feature names, outputs two plots of the data, where the top two features were selected via 
+#pearson correlation, and second by random forest.
+def plot_top_2_features(X,y,features):
+	X_pv, X_rf, top_p_features, top_rf_features = get_top_n_features(X, y, 2, return_indices=True)
+	plt.subplot(1,2,1)
+	plt.scatter(X_pv[:, 0], X_pv[:, 1], c=y)
+	plt.xlabel(features[top_p_features[0]])
+	plt.ylabel(features[top_p_features[1]])
+	plt.title('Pearson Correlation')
+	
+	plt.subplot(1,2,2)
+	plt.xlabel(features[top_rf_features[0]])
+	plt.ylabel(features[top_rf_features[1]])
+	plt.scatter(X_rf[:, 0], X_rf[:, 1], c=y)
+	plt.title('Random Forest Regressor')
+	
+	plt.suptitle('Top 2 Features')
+	plt.show()
+
+#Takes in a training dataset, testing dataset, training labels, test labels, and (optional) an array of feature names.
+#Creates two datasets by selecting top 2 features by pearson correlation, and random forests. Runs all seven classifiers
+#with fixed parameters across datasets and outputs a plot with results.
+def plot_top_2_features_with_classifiers(X_train, X_test, y_train, y_test, features = []):
+    h = .02  # step size in the mesh
+    degree = 3
+    titles = ['SVC linear kernel','LinearSVC (linear kernel)','SVC RBF kernel','SVC polynomial (degree %r) kernel' % (degree)]
+    SVM_classifiers = [
+        svm.SVC(kernel='linear'),
+        svm.SVC(kernel='rbf'),
+        svm.SVC(kernel='poly', degree=3),
+        svm.LinearSVC()]
+
+
+    names = ["Nearest Neighbors", titles[2], "Decision Tree",
+             "Random Forest", "AdaBoost", "Naive Bayes", "LDA", "QDA"]
+    classifiers = [
+        KNeighborsClassifier(3),
+        SVM_classifiers[2],
+        DecisionTreeClassifier(),
+        RandomForestClassifier(),
+        AdaBoostClassifier(),
+        GaussianNB(),
+        LDA_clf(),
+        QDA_clf()]
+
+    figure = plt.figure(figsize=(9, 9))
+    i = 1
+    j = 10
+    # iterate over datasets
+    X = np.append(X_train,X_test, axis=0)
+    y = np.append(y_train, y_test, axis=0)
+    X_train_p, X_train_rf, top_p_features, top_rf_features = get_top_n_features(X_train, y_train, 2, True)
+    X_test_p, X_test_rf = X_test[:, top_p_features], X_test[:, top_rf_features]
+    if len(features) != 0:
+
+
+	X_p = np.append(X_train_p, X_test_p, axis = 0)
+    X_rf = np.append(X_train_rf, X_test_rf, axis = 0)
+
+    x_min, x_max = min(X_p[:,0].min(), X_rf[:,0].min()) - 0.5, max(X_p[:,0].max(), X_rf[:,0].max()) + 0.5
+    y_min, y_max = min(X_p[:,1].min(), X_rf[:,1].min()) - 0.5, max(X_p[:,1].max(), X_rf[:,1].max()) + 0.5 
+
+    xx, yy = np.meshgrid(np.arange(x_min, x_max, h), np.arange(y_min, y_max, h))
+
+    # just plot the dataset first
+    cm = plt.cm.RdBu
+    cm_bright = ListedColormap(['#FF0000', '#0000FF'])
+    ax = plt.subplot(2, 9, i)
+
+    # Plot the training points
+    ax.scatter(X_train_p[:, 0], X_train_p[:, 1], c=y_train, cmap=cm_bright)
+    # and testing points
+    ax.scatter(X_test_p[:, 0], X_test_p[:, 1], c=y_test, cmap=cm_bright, alpha=0.6)
+    ax.set_xlim(xx.min(), xx.max())
+    ax.set_ylim(yy.min(), yy.max())
+    ax.set_title("Pearson Features")
+    if len(features) != 0:
+        ax.set_xlabel(features[top_p_features[0]])
+        ax.set_ylabel(features[top_p_features[1]])
+
+    ax = plt.subplot(2, 9, j)
+    # Plot the training points
+    ax.scatter(X_train_rf[:, 0], X_train_rf[:, 1], c=y_train, cmap=cm_bright)
+    # and testing points
+    ax.scatter(X_test_rf[:, 0], X_test_rf[:, 1], c=y_test, cmap=cm_bright, alpha=0.6)
+    ax.set_xlim(xx.min(), xx.max())
+    ax.set_ylim(yy.min(), yy.max())
+
+    ax.set_title("RF Features")
+    if len(features) != 0:
+        ax.set_xlabel(features[top_rf_features[0]])
+        ax.set_ylabel(features[top_rf_features[1]])
+
+
+    # iterate over classifiers
+    for name, clf in zip(names, classifiers):
+        i += 1
+        j += 1
+        ax = plt.subplot(2, 9, i)
+        clf.fit(X_train_p, y_train)
+        score = clf.score(X_test_p, y_test)
+
+        # Plot the decision boundary. For that, we will assign a color to each
+        # point in the mesh [x_min, m_max]x[y_min, y_max].
+        if hasattr(clf, "decision_function"):
+            Z = clf.decision_function(np.c_[xx.ravel(), yy.ravel()])
+        else:
+            Z = clf.predict_proba(np.c_[xx.ravel(), yy.ravel()])[:, 1]
+
+        # Put the result into a color plot
+        Z = Z.reshape(xx.shape)
+        ax.contourf(xx, yy, Z, cmap=cm, alpha=.8)
+
+        # Plot also the training points
+        ax.scatter(X_train_p[:, 0], X_train_p[:, 1], c=y_train, cmap=cm_bright)
+        # and testing points
+        ax.scatter(X_test_p[:, 0], X_test_p[:, 1], c=y_test, cmap=cm_bright,
+                   alpha=0.6)
+
+        ax.set_xlim(xx.min(), xx.max())
+        ax.set_ylim(yy.min(), yy.max())
+        ax.set_xticks(())
+        ax.set_yticks(())
+        ax.set_title(name)
+        ax.text(xx.max() - .3, yy.min() + .3, ('%.2f' % score).lstrip('0'),
+                size=15, horizontalalignment='right')
+
+        ax = plt.subplot(2, 9, j)
+        clf.fit(X_train_rf, y_train)
+        score = clf.score(X_test_rf, y_test)
+
+        # Plot the decision boundary. For that, we will assign a color to each
+        # point in the mesh [x_min, m_max]x[y_min, y_max].
+        if hasattr(clf, "decision_function"):
+            Z = clf.decision_function(np.c_[xx.ravel(), yy.ravel()])
+        else:
+            Z = clf.predict_proba(np.c_[xx.ravel(), yy.ravel()])[:, 1]
+
+        # Put the result into a color plot
+        Z = Z.reshape(xx.shape)
+        ax.contourf(xx, yy, Z, cmap=cm, alpha=.8)
+
+        # Plot also the training points
+        ax.scatter(X_train_rf[:, 0], X_train_rf[:, 1], c=y_train, cmap=cm_bright)
+        # and testing points
+        ax.scatter(X_test_rf[:, 0], X_test_rf[:, 1], c=y_test, cmap=cm_bright,
+                   alpha=0.6)
+
+        ax.set_xlim(xx.min(), xx.max())
+        ax.set_ylim(yy.min(), yy.max())
+        ax.set_xticks(())
+        ax.set_yticks(())
+        ax.set_title(name)
+        ax.text(xx.max() - .3, yy.min() + .3, ('%.2f' % score).lstrip('0'),
+                size=15, horizontalalignment='right')
+
+    #figure.subplots_adjust(left=.02, right=.98)
+    figure.subplots_adjust(left=.04, right=.99, hspace = 0.3)
+
+    plt.show()
+
+######################################################################################################
+#The following functions are helper functions to mainly run_classifiers, but also the last two functions.
+
+#Takes in an empty dictionary, and a dictionary of (unique classifier --> (train score, test score)),
+#returns dictionary containing (classifier with highest test score --> (train score, test score))
+#for each kind of classifier.
+def find_best_of_each_classifier(classifier_scores, best_of_each_classifier):
+	for key in classifier_scores.keys():
+		name = key.partition(' ')[0]
+		if best_of_each_classifier.has_key(name):
+			if classifier_scores[key][1] > best_of_each_classifier[name][2]:
+				best_of_each_classifier[name] = [key, classifier_scores[key][0], classifier_scores[key][1]]
+		else:
+			best_of_each_classifier[name] = [key, classifier_scores[key][0], classifier_scores[key][1]]
+
+
+#Takes in a 2-d array where each row holds a unique classifier, and its corresponding training score and test score.
+#Returns a dictionary mapping the classifier to its corresponding training score and test score.
+def map_name_to_scores(results, dictionary):
+	for name, train_score, test_score in results:
+		if dictionary.has_key(name):
+			dictionary[name].append([train_score, test_score])
+		else:
+			dictionary[name] = [[train_score, test_score]]
+
+#Takes in a dictionary of (unique classifier --> array of [train score, test score]). Runs over said array,
+#finds mean of train scores, and mean of test scores, then returns dictionary where 
+#(unique classifier --> (train score mean, test score mean))
+def map_to_means(classifier_scores):
+	train_scores = 0.0
+	test_scores = 0.0
+	count = 0.0
+	for key in classifier_scores.keys():
+		for train_score, test_score in classifier_scores[key]:
+			train_scores += train_score
+			test_scores += test_score
+			count += 1.0
+		train_mean = round(train_scores / count, 4)
+		test_mean = round(test_scores / count, 4)
+		classifier_scores[key] = [train_mean, test_mean]
+	return classifier_scores
+
+#Takes in an n x m data matrix, and its corresponding n x 1 array of labels (presumed to be 2-class),
+#and returns a numpy array of the coefficient indexes, ordered from best to worst features. If
+#include_vals=True, then the original pearson coefficient scores are included as well, pairwise with
+#their corresponding index
+def pear_vals(X, y, include_vals=False):
+	m_features = np.shape(X)[1]
+	coeffs = [None] * m_features
+	coeffs_abs = [None] * m_features
+	for i in range(m_features):
+		result = scipy.stats.pearsonr(y, X[:,i])[0]
+		if math.isnan(result):
+			result = 0
+		coeffs[i] = result
+		coeffs_abs[i] = [i, abs(result)]
+	coeffs_abs = sorted(coeffs_abs, key=itemgetter(1), reverse=True)
+	coeffs_final = [None] * m_features
+	for i in range(m_features):
+		coeff_index = coeffs_abs[i][0]
+		coeff_val = coeffs[coeff_index]
+		coeffs_final[i] = [int(coeff_index), coeff_val]
+	if include_vals:
+		return np.array(coeffs_final)
+	else:
+		return np.array(coeffs_final)[:,0].astype(int)
+
+#Takes in an n x m data matrix, and its corresponding n x 1 array of labels (presumed to be 2-class),
+#and returns a numpy array of the coefficient indexes, ordered from best to worst features. If
+#include_vals=True, then the original random forest values are included as well, pairwise with
+#their corresponding index
+def rf_vals(X,y, include_vals=False):
+	m_features = np.shape(X)[1]
+	rf = RandomForestRegressor()
+	rf.fit(X, y)
+	feat_indices = list(range(m_features))
+	result = sorted(zip(feat_indices, rf.feature_importances_), key=itemgetter(1), reverse=True)
+	if include_vals:
+		return np.array(result)
+	else:
+		return np.array(result)[:,0].astype(int)
+
+#Takes in an n x m data matrix, its corresponding n x 1 array of labels (presumed to be 2-class),
+#the number of top features considered (be it an integer, or an array of integer indexes to slice
+#from array of top features), returns one data matrix with top features sliced due to Pearson correlation
+#feature selection, and another data matrix with top features sliced due to Random Forest feature selection.
+#If return_indices=True, then arrays of integer indexes are returned, corresponding to top features.
+def get_top_n_features(X,y, n_features, return_indices=False):
+	if isinstance(n_features, int):
+		top_p_features = pear_vals(X,y)[:n_features]
+		top_rf_features = rf_vals(X,y)[:n_features]
+	else:
+		top_p_features = pear_vals(X,y)[n_features]
+		top_rf_features = rf_vals(X,y)[n_features]
+	X_pv = X[:, top_p_features]
+	X_rf = X[:, top_rf_features]
+	if return_indices:
+		return X_pv, X_rf, top_p_features, top_rf_features
+	else: 
+		return X_pv, X_rf

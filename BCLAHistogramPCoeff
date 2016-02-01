@@ -1,0 +1,99 @@
+import numpy as np
+import scipy
+from scipy.stats.stats import pearsonr
+from operator import itemgetter
+import matplotlib.pyplot as plt
+from pylab import *
+import pylab
+
+
+
+
+features = np.genfromtxt('blca_features.tsv', dtype=str)
+target = np.genfromtxt('blca_target.tsv', dtype=str)
+testdata = np.genfromtxt('blca_testdata_1.tsv')
+testsamples = np.genfromtxt('blca_testsamples_1.tsv', dtype=str)
+testtarget = np.genfromtxt('blca_testtarget_1.tsv')
+traindata = np.genfromtxt('blca_traindata_0_1.tsv')
+trainsamples = np.genfromtxt('blca_trainsamples_1.tsv', dtype=str)
+traintarget = np.genfromtxt('blca_traintarget_1.tsv')
+
+X = np.append(traindata, testdata, axis = 1)
+y = np.append(traintarget, testtarget)
+
+print np.shape(X.T)
+print X.T
+def pearson_values(X,y):
+	m_features = np.shape(X)[1]
+	coeffs = [None] * m_features
+	coeffs_abs = [None] * m_features
+	for i in range(m_features):
+		result = scipy.stats.pearsonr(y, X[:,i])[0]
+		if math.isnan(result):
+			result = 0
+		coeffs[i] = result
+		coeffs_abs[i] = [i, abs(result)]
+	coeffs_abs = sorted(coeffs_abs, key=itemgetter(1), reverse=True)
+	coeffs_final = [None] * m_features
+	for i in range(m_features):
+		coeff_index = coeffs_abs[i][0]
+		coeff_val = coeffs[coeff_index]
+		coeffs_final[i] = [coeff_index, coeff_val]
+	return np.array(coeffs_final)
+
+print pearson_values(X.T,y)
+'''
+coefficients = [None] * len(features)
+coeff_values = [None] * len(features)
+for i,j in enumerate(features):
+	result = scipy.stats.pearsonr(y, X[i,:])
+	coefficients[i] = (i, j, result[0]) #index, feature, coefficient
+	coeff_values[i] = result[0]
+
+x = np.array(coeff_values)
+x = x[~np.isnan(x)]
+
+print x
+'''
+
+'''
+plt.subplot(2, 2, 1)
+plt.hist(x, 100)
+plt.title('BCLA Pearson Correlation Coefficients')
+plt.xlabel('Coefficient Value')
+plt.ylabel('Quantity')
+
+
+
+pylab.hist(x, 100)
+pylab.title('BCLA Pearson Correlation Coefficients')
+pylab.xlabel('Coefficient Value')
+pylab.ylabel('Quantity')
+pylab.show()
+
+trait_num = np.shape(X)[0]
+how_many_to_compute = 1000
+coefficients_random = [None] * (trait_num * how_many_to_compute)
+
+index = 0
+for i in range(how_many_to_compute):
+	print i
+	y_copy = np.copy(y)
+	np.random.shuffle(y_copy)
+	for j in range(trait_num):
+		result = scipy.stats.pearsonr(y_copy, X[j,:])
+		coefficients_random[index] = result[0]
+		index += 1
+
+x = np.array(coefficients_random)
+x = x[~np.isnan(x)]
+
+plt.subplot(2, 2, 2)
+pylab.hist(x, 100)
+pylab.title('BCLA Pearson Correlation Coefficients - Random')
+pylab.xlabel('Coefficient Value')
+pylab.ylabel('Quantity')
+pylab.show()
+
+
+'''

@@ -1,0 +1,106 @@
+import numpy as np
+import scipy
+import matplotlib.pyplot as plt
+from sklearn import neighbors,datasets
+from sklearn.cross_validation import train_test_split
+from numpy import *
+from sklearn.datasets import make_moons, make_circles, make_classification
+from scipy.stats.stats import pearsonr
+
+X, y = make_circles(n_samples=600, noise=0.1, factor = 0.3)
+
+x_p = scipy.stats.pearsonr(X[:,0], y)
+y_p = scipy.stats.pearsonr(X[:,1], y)
+print x_p
+print y_p
+
+top_two = [1,0]
+split = 1.0/3.0
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=split)
+traindata = X_train
+testdata = X_test
+traintarget = y_train
+testtarget = y_test
+print len(X_train)
+print len(X_test)
+
+
+#test
+'''
+k_num = np.arange(1,201).tolist()
+
+accuracies = []
+
+for i in range(len(top_two)):
+	features = []
+	for j in range(i + 1):
+		features.append(top_two[j])
+	X_train = traindata[:,features]
+	X_test = testdata[:,features]
+	derp = 0
+	for k in range(1,len(X_test) + 1):
+		clf = neighbors.KNeighborsClassifier(n_neighbors = k, metric = 'euclidean')
+		clf.fit(X_train,y_train)
+		y_pred = clf.predict(X_test)
+		correct = 0.0
+		for l in range(len(testtarget)):
+			if testtarget[l] == y_pred[l]:
+				correct += 1
+		accuracy = (correct / len(y_pred))
+		accuracies.append(accuracy)
+
+row = 2
+col = 200
+Z = [accuracies[col*i : col*(i + 1)] for i in range(row)]
+#print np.shape(np.array(accuracies))
+#print accuracies
+#print Z
+'''
+
+k_num = np.arange(1,401).tolist()
+
+accuracies = []
+
+for i in range(len(top_two)):
+	features = []
+	for j in range(i + 1):
+		features.append(top_two[j])
+	X_train = traindata[:,features]
+	X_test = testdata[:,features]
+	derp = 0
+	for k in range(1,len(X_train) + 1):
+		clf = neighbors.KNeighborsClassifier(n_neighbors = k, metric = 'euclidean')
+		clf.fit(X_train,y_train)
+		y_pred = clf.predict(X_train)
+		correct = 0.0
+		for l in range(len(traintarget)):
+			if traintarget[l] == y_pred[l]:
+				correct += 1
+		accuracy = (correct / len(y_pred))
+		accuracies.append(accuracy)
+
+row = 2
+col = 400
+Z = [accuracies[col*i : col*(i + 1)] for i in range(row)]
+#print np.shape(np.array(accuracies))
+#print accuracies
+print Z
+
+
+
+x = k_num
+y = np.arange(1,3).tolist()
+X,Y = meshgrid(x,y)
+'''
+plt.xlabel('k')
+plt.ylabel('Number of Top Features')
+plt.title('kNN Accuracy - Two Moons Train')
+plt.contourf(X,Y,Z)
+'''
+
+#Z = np.random.rand(10,6)
+plt.pcolor(np.array(Z))
+plt.colorbar()
+
+plt.show()
